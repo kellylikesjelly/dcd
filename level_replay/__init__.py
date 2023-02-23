@@ -6,3 +6,4 @@
 
 from .level_sampler import LevelSampler
 from .level_store import LevelStore
+from .trajectory_buffer import TrajectoryBuffer

@@ -269,6 +269,24 @@ parser.add_argument(
     type=float, 
     default=1.0,
     help="Staleness distribution temperature.")
+########################## DIVERSITY ARGUMENTS ########################
+parser.add_argument(
+    "--diversity_coef",
+    type=float,
+    default=0.3,
+    help="Diversity-sampling weighting.")
+parser.add_argument(
+    "--diversity_transform",
+    type=str, 
+    default='power',
+    choices=['max', 'eps_greedy', 'rank', 'power', 'softmax'], 
+    help="Diversity score transform.")
+parser.add_argument(
+    "--diversity_temperature",
+    type=float, 
+    default=1.0,
+    help="Diversity distribution temperature.")
+
 parser.add_argument(
     "--train_full_distribution",
     type=str2bool, nargs='?', const=True, default=True,

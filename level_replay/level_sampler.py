@@ -35,6 +35,9 @@ class LevelSampler():
         staleness_coef=0, 
         staleness_transform='power', 
         staleness_temperature=1.0, 
+        diversity_coef=0,
+        diversity_transform='power',
+        diversity_temperature=1.0,
         sample_full_distribution=False, 
         seed_buffer_size=0, 
         seed_buffer_priority='replay_support',
@@ -64,6 +67,11 @@ class LevelSampler():
         self.replay_prob = replay_prob # replay prob
         self.alpha = alpha
         self.staleness_coef = staleness_coef
+        ############################## DIVERSITY COEFFICIENT ###############################
+        self.diversity_coef = diversity_coef
+        self.diversity_transform = diversity_transform
+        self.diversity_temperature = diversity_temperature
+
         self.staleness_transform = staleness_transform
         self.staleness_temperature = staleness_temperature
         self.gamma = gamma
@@ -72,15 +80,23 @@ class LevelSampler():
 
         # Track seeds and scores as in np arrays backed by shared memory
         self.seed_buffer_size = seed_buffer_size if not seeds else len(seeds)
+        #working seed set is size N (seeds or working_seed_set)
         N = self.seed_buffer_size
+        #initialise self.seeds to store seeds and self.seed2seedindex --------------
         self._init_seed_index(seeds)
 
         self.unseen_seed_weights = np.array([1.]*N)
+        #initialise seed score array ----------
         self.seed_scores = np.array([0.]*N, dtype=np.float)
         self.partial_seed_scores = np.zeros((num_actors, N), dtype=np.float)
         self.partial_seed_max_scores = np.ones((num_actors, N), dtype=np.float)*float('-inf')
         self.partial_seed_steps = np.zeros((num_actors, N), dtype=np.int32)
+        #initialise seed staleness array ----------
         self.seed_staleness = np.array([0.]*N, dtype=np.float)
+
+        ################## initialise seed diversity array ############################
+        self.seed_diversity = np.array([0.]*N, dtype=np.float)
+
 
         self.running_sample_count = 0
 
@@ -105,7 +121,9 @@ class LevelSampler():
             self.seed2timestamp_buffer = {} # Buffer seeds are unique across actors
             self.partial_seed_scores_buffer = [{} for _ in range(num_actors)]
             self.partial_seed_max_scores_buffer = [{} for _ in range(num_actors)]
-            self.partial_seed_steps_buffer = [{} for _ in range(num_actors)]            
+            self.partial_seed_steps_buffer = [{} for _ in range(num_actors)]
+
+            self.diversity_buffer = {}
 
         # TSCL specific data structures
         if self.strategy.startswith('tscl'):
@@ -115,6 +133,8 @@ class LevelSampler():
             self.unseen_seed_weights = np.zeros(N) # Force uniform distribution over seeds
 
     def seed_range(self):
+        #sample full distribution probably means if there is a limit to seed numbers -------
+        #return seed range ----------
         if not self.sample_full_distribution:
             return (int(min(self.seeds)), int(max(self.seeds)))
         else:
@@ -184,6 +204,7 @@ class LevelSampler():
 
     def update_seed_score(self, actor_index, seed, score, max_score, num_steps):
         if self.sample_full_distribution and seed in self.staging_seed_set:
+            #the seed evaluated is from staging set -----------
             score, seed_idx = self._partial_update_seed_score_buffer(actor_index, seed, score, num_steps, done=True)
         else:
             score, seed_idx = self._partial_update_seed_score(actor_index, seed, score, max_score, num_steps, done=True)
@@ -191,6 +212,7 @@ class LevelSampler():
         return score, seed_idx
 
     def _partial_update_seed_score(self, actor_index, seed, score, max_score, num_steps, done=False):
+        #updates seed score array in level_sampler.seed_scores using partial scores --------
         seed_idx = self.seed2index.get(seed, -1)
         if seed_idx < 0:
             return 0, None
@@ -230,24 +252,44 @@ class LevelSampler():
     def _partial_update_seed_score_buffer(self, actor_index, seed, score, num_steps, done=False):
         seed_idx = -1
         self.seed2actor[seed].add(actor_index)
+        #if no score for the staging seed has been calculated before, intialise to 0
         partial_score = self.partial_seed_scores_buffer[actor_index].get(seed, 0)
         partial_num_steps = self.partial_seed_steps_buffer[actor_index].get(seed, 0)
 
         running_num_steps = partial_num_steps + num_steps
         merged_score = partial_score + (score - partial_score)*num_steps/float(running_num_steps)
 
+        #################### COMBINE DIVERSITY IN WITH MERGED SCORE ############################
+        diversity_score = self.diversity_buffer[seed]
+        merged_score_combined = self.diversity_coef*diversity_score + (1-self.diversity_coef)*merged_score
+
         if done:
+            print('DONE')
             # Move seed into working seed data structures
             seed_idx = self._next_buffer_index
-            if self.seed_scores[seed_idx] <= merged_score or self.unseen_seed_weights[seed_idx] > 0:
+            print('merged_score_combined', merged_score_combined)
+            print('self.seed_scores[seed_idx]', self.seed_scores[seed_idx])
+            if self.seed_scores[seed_idx] <= merged_score_combined or self.unseen_seed_weights[seed_idx] > 0:
+                print('REPLACED')
+                #if lowest seed score is lower than current seed's score, ------------
+                # or if lowest seed is already seen
+                # remove lowest seed from working seed set, add current seed to working seed set
+                # new seed replaces old seed index in all lists  ---------------
+
+                #seeds in seed_scores, seed_staleness etc are all working seeds
+
                 self.unseen_seed_weights[seed_idx] = 0. # Unmask this index
                 self.working_seed_set.discard(self.seeds[seed_idx])
                 self.working_seed_set.add(seed)
                 self.seeds[seed_idx] = seed
+                #############  ADD DIVERSITY SCORE ##############
+                self.seed_diversity[seed_idx] = seed
+
                 self.seed2index[seed] = seed_idx 
                 self.seed_scores[seed_idx] = merged_score
                 self.partial_seed_scores[:,seed_idx] = 0.
                 self.partial_seed_steps[:,seed_idx] = 0 
+
                 self.seed_staleness[seed_idx] = self.running_sample_count - self.seed2timestamp_buffer[seed]
                 self.working_seed_buffer_size = min(self.working_seed_buffer_size + 1, self.seed_buffer_size)
 
@@ -260,8 +302,11 @@ class LevelSampler():
             for a in self.seed2actor[seed]:
                 self.partial_seed_scores_buffer[a].pop(seed, None) 
                 self.partial_seed_steps_buffer[a].pop(seed, None)
+                ################ REMOVE DIVERSITY OF SEED FROM BUFFER ###############
+            self.diversity_buffer.pop(seed, None)
             del self.seed2timestamp_buffer[seed]
             del self.seed2actor[seed]
+            #remove seed from staging set -------------
             self.staging_seed_set.remove(seed)
 
             if self.track_solvable:
@@ -484,26 +529,32 @@ class LevelSampler():
         return not self.sample_full_distribution or (self.sample_full_distribution and self.seed_buffer_size > 0)
 
     def _update_with_rollouts(self, rollouts, score_function):
+        #uses rollout objects to update seed scores -----------
         if not self._has_working_seed_buffer:
             return
 
         level_seeds = rollouts.level_seeds
         policy_logits = rollouts.action_log_dist
         total_steps, num_actors = policy_logits.shape[:2]
+        #mask is for marking done_steps? ------------
         done = ~(rollouts.masks > 0)
         # early_done = ~(rollouts.bad_masks > 0)
         cliffhanger = ~(rollouts.cliffhanger_masks > 0)
 
         for actor_index in range(num_actors):
+            #scores calculated by episode ----------
             start_t = 0
             done_steps = done[:,actor_index].nonzero()[:,0]
 
             for t in done_steps:
+                #probably are the steps marking conclusion of episode? -------
+
                 if not start_t < total_steps: break
 
                 if t == 0: # if t is 0, then this done step caused a full update of previous seed last cycle
                     continue 
 
+                #retrieve environment corresponding to the episode
                 seed_t = level_seeds[start_t,actor_index].item()
 
                 score_function_kwargs = {}
@@ -529,8 +580,10 @@ class LevelSampler():
                     # Update grounded values (highest achieved return per seed)
                     grounded_value = None
                     if self.grounded_values is not None:
+                        #update it -------
                         seed_idx = self.seed2index.get(seed_t, None)
                         score_function_kwargs['seed_idx'] = seed_idx
+                        #sum of returns in episode ---------
                         grounded_value_ = rollouts.rewards[start_t:t].sum(0)[actor_index]
                         if seed_idx is not None:
                             grounded_value = max(self.grounded_values[seed_idx], grounded_value_)
@@ -540,15 +593,19 @@ class LevelSampler():
 
                     score, max_score = score_function(**score_function_kwargs)
                     num_steps = len(episode_logits)
+                    #do final update on seed score using each episode incrementally ----------
+                    print('COMPLETE')
                     _, seed_idx = self.update_seed_score(actor_index, seed_t, score, max_score, num_steps)
 
                     # Track grounded value for future reference
                     if seed_idx is not None and self.grounded_values is not None and grounded_value is not None:
                         self.grounded_values[seed_idx] = grounded_value
 
+                #move to next episode -------------
                 start_t = t.item()
 
             if start_t < total_steps:
+                #incomplete episode -----------
                 seed_t = level_seeds[start_t,actor_index].item()
 
                 score_function_kwargs = {}
@@ -559,25 +616,32 @@ class LevelSampler():
                 score_function_kwargs['seed'] = seed_t
 
                 if self.requires_value_buffers:
+                    #positive value loss requires -------------
                     score_function_kwargs['returns'] = rollouts.returns[start_t:,actor_index]
                     if self.strategy == 'alt_advantage_abs':
                         score_function_kwargs['alt_returns'] = rollouts.alt_returns[start_t:,actor_index]
+                    #returns is discounted sum of rewards -----------
                     score_function_kwargs['rewards'] = rollouts.rewards[start_t:,actor_index]
 
                     if rollouts.use_popart:
                         score_function_kwargs['value_preds'] = rollouts.denorm_value_preds[start_t:t,actor_index]
                     else:
+                        #get predicted V(s) for advantage estimation ----------
                         score_function_kwargs['value_preds'] = rollouts.value_preds[start_t:,actor_index]
 
                 score, max_score = score_function(**score_function_kwargs)
                 num_steps = len(episode_logits)
 
+                #for incomplete episodes final update is different from complete episodes ---------
                 if self.sample_full_distribution and seed_t in self.staging_seed_set:
+                    print('NOT COMPLETE')
                     self._partial_update_seed_score_buffer(actor_index, seed_t, score, num_steps)
                 else:
+                    print('NOT COMPLETE')
                     self._partial_update_seed_score(actor_index, seed_t, score, max_score, num_steps)
 
     def after_update(self):
+        #after updating agent weights -----------
         if not self._has_working_seed_buffer:
             return
 
@@ -599,9 +663,34 @@ class LevelSampler():
                         self.update_seed_score(actor_index, seed, 0, float('-inf'), 0)
 
     def _update_staleness(self, selected_idx):
+        #if using staleness in weights update staleness after each seed score update cycle --------
         if self.staleness_coef > 0:
             self.seed_staleness = self.seed_staleness + 1
             self.seed_staleness[selected_idx] = 0
+
+    def update_diversity(self, seed, diversity, sample_full_distribution):
+        #update diversity score for sampled seeds
+        #get seed index
+        #if not full distribution, update seed_diversity immediately
+        #if full distribution, add to seed buffer
+        print('UPDATE DIVERSITY')
+    
+        if sample_full_distribution:
+            if seed in self.working_seed_set:
+                #if seed is sampled from working buffer edit diversity score not buffer
+                print('WORKING SET')
+                seed_idx = self.seed2index.get(seed)
+                self.seed_diversity[seed_idx] = diversity
+            else:
+                #if seed is from staging set edit diversity buffer
+                self.diversity_buffer[seed] = diversity
+                print('DIVERSITY BUFFER')
+                print(self.diversity_buffer)
+        else:
+            print('NOT FULL DIST')
+            seed_idx = self.seed2index.get(seed)
+            self.seed_diversity[seed_idx] = diversity
+
 
     def sample_replay_decision(self):
         if self.sample_full_distribution: 
@@ -613,6 +702,7 @@ class LevelSampler():
                     else:
                         return False
                 else:
+                    #replay schedule = proportional ----------
                     if proportion_filled >= self.rho and np.random.rand() < min(proportion_filled, self.replay_prob):
                         return True
                     else:
@@ -622,8 +712,10 @@ class LevelSampler():
                 return False
 
         elif self.replay_schedule == 'fixed':
+            #proportion_filled is actually proportion_seen -----------
             proportion_seen = self._proportion_filled
             if proportion_seen >= self.rho: 
+                #if many seeds have been seen then start replaying -----------
                 # Sample replay level with fixed replay_prob OR if all levels seen
                 if np.random.rand() < self.replay_prob or not proportion_seen < 1.0:
                     return True
@@ -646,6 +738,7 @@ class LevelSampler():
         for i, seed in enumerate(seeds):
             self.running_sample_count += 1
             if not (seed in self.staging_seed_set or seed in self.working_seed_set):
+                #if seed is new, add it to staging set -------------
                 self.seed2timestamp_buffer[seed] = self.running_sample_count
                 self.staging_seed_set.add(seed)
 
@@ -654,6 +747,7 @@ class LevelSampler():
                         self._init_solvable_tracking()
                     self.staging_seed2solvable[seed] = solvable[i]
             else:
+                #if seed is not new, update staleness ----------
                 seed_idx = self.seed2index.get(seed, None)
                 if seed_idx is not None:
                     self._update_staleness(seed_idx)
@@ -662,19 +756,24 @@ class LevelSampler():
         return self._sample_replay_level(update_staleness=update_staleness)
 
     def _sample_replay_level(self, update_staleness=True):
+        #get transformed version of scores for weighted replay sampling ---------
         sample_weights = self.sample_weights()
 
         if np.isclose(np.sum(sample_weights), 0):
+            #if sample_weights are all close to 0, reset? --------------
             sample_weights = np.ones_like(self.seeds, dtype=np.float)/len(self.seeds)
             sample_weights = sample_weights*(1-self.unseen_seed_weights)
             sample_weights /= np.sum(sample_weights)
         elif np.sum(sample_weights, 0) != 1.0:
+            #if not normalised, normalise it? -----------------
             sample_weights = sample_weights/np.sum(sample_weights,0)
 
+        #sample seed according to sample weights --------------
         seed_idx = np.random.choice(range(len(self.seeds)), 1, p=sample_weights)[0]
         seed = self.seeds[seed_idx]
 
         if update_staleness:
+            #upon choosing seed update staleness of it --------
             self._update_staleness(seed_idx)
 
         return int(seed)
@@ -688,6 +787,7 @@ class LevelSampler():
             self.seed2timestamp_buffer[seed] = self.running_sample_count
             self.staging_seed_set.add(seed)
         else:
+            #normalise probability, seen seeds have 0 probability ---------
             sample_weights = self.unseen_seed_weights/self.unseen_seed_weights.sum()
             seed_idx = np.random.choice(range(len(self.seeds)), 1, p=sample_weights)[0]
             seed = self.seeds[seed_idx]
@@ -724,6 +824,9 @@ class LevelSampler():
             return self._sample_unseen_level()
 
     def sample_weights(self):
+        #sampling weights is combination of score i.e. regret and staleness ---------
+        #NEED TO ADD IN DIVERSITY SCORE IN THE ARRAY
+
         weights = self._score_transform(self.score_transform, self.temperature, self.seed_scores)
         weights = weights * (1-self.unseen_seed_weights) # zero out unseen levels
 
@@ -731,21 +834,46 @@ class LevelSampler():
         if z > 0:
             weights /= z
         else:
+            print(weights)
+            #giving every level equal weights
             weights = np.ones_like(weights, dtype=np.float)/len(weights)
+            #unseen=1, seen=0
+            #unseen:0, seen:1
+            #if unseen, 0 out the weights
+            #but if all unseen (i.e. nothing in working seed buffer yet) then how?
             weights = weights * (1-self.unseen_seed_weights)
+            print(weights)
             weights /= np.sum(weights)
 
         staleness_weights = 0
         if self.staleness_coef > 0:
             staleness_weights = self._score_transform(self.staleness_transform, self.staleness_temperature, self.seed_staleness)
-            staleness_weights = staleness_weights * (1-self.unseen_seed_weights)
+            staleness_weights = staleness_weights * (1-self.unseen_seed_weights) # zero out unseen levels ----------
             z = np.sum(staleness_weights)
             if z > 0: 
                 staleness_weights /= z
             else:
                 staleness_weights = 1./len(staleness_weights)*(1-self.unseen_seed_weights)
 
-            weights = (1 - self.staleness_coef)*weights + self.staleness_coef*staleness_weights
+        ################################### ADD IN DIVERSITY ####################################
+        diversity_weights = 0
+        if self.diversity_coef > 0:
+            diversity_weights = self._score_transform(self.diversity_transform, self.diversity_temperature, self.seed_diversity)
+            diversity_weights = diversity_weights * (1-self.unseen_seed_weights)
+            z = np.sum(diversity_weights)
+            if z > 0: 
+                print('DIVERSITY SCORES')
+                print(self.seed_diversity)
+                print('DIVERSITY WEIGHTS')
+                print(diversity_weights)
+                diversity_weights /= z
+            else:
+                diversity_weights = 1./len(diversity_weights)*(1-self.unseen_seed_weights)
+
+        #equation combining score and staleness ----------
+        weights = (1 - self.staleness_coef - self.diversity_coef)*weights \
+            + self.staleness_coef*staleness_weights \
+            + self.diversity_coef*diversity_weights
 
         return weights
 

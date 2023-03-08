@@ -17,6 +17,8 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from baselines.logger import HumanOutputFormat
 
+from gym.wrappers import FlattenObservation
+
 display = None
 
 if sys.platform.startswith('linux'):

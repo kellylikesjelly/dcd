@@ -244,6 +244,11 @@ def make_plr_args(args, obs_space, action_space):
         staleness_coef=args.staleness_coef,
         staleness_transform=args.staleness_transform,
         staleness_temperature=args.staleness_temperature,
+        ################ DIVERSITY ARGS #####################
+        diversity_coef=args.diversity_coef,
+        diversity_transform=args.diversity_transform,
+        diversity_temperature=args.diversity_temperature,
+
         sample_full_distribution=args.train_full_distribution,
         seed_buffer_size=args.level_replay_seed_buffer_size,
         seed_buffer_priority=args.level_replay_seed_buffer_priority,

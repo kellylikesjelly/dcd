@@ -17,6 +17,8 @@ from util import \
     is_discrete_actions, \
     get_obs_at_index, \
     set_obs_at_index
+################################ IMPORT TRAJECTORY BUFFER ################################
+from level_replay import TrajectoryBuffer
 
 from teachDeepRL.teachers.teacher_controller import TeacherController
 
@@ -138,6 +140,10 @@ class AdversarialRunner(object):
         # Set up ALP-GMM
         if self.is_alp_gmm:
             self._init_alp_gmm()
+
+        ######################### INTIALISE TRAJ BUFFER ###########################
+        sample_full_distribution = plr_args["sample_full_distribution"]
+        self.trajectory_buffer = TrajectoryBuffer(self.venv, sample_full_distribution)
 
     @property
     def use_byte_encoding(self):
@@ -451,7 +457,14 @@ class AdversarialRunner(object):
                       edit_level=False,
                       num_edits=0, 
                       fixed_seeds=None):
+
+        #return rollout info --------------------------
+
+        #if generating levels it must be saved into storage/altered properties of self directly since it is not used as an argument later --------
+        
         args = self.args
+
+        #if generating a batch of environments -----------------
         if is_env:
             if edit_level: # Get mutated levels
                 levels = [self.level_store.get_level(seed) for seed in fixed_seeds]
@@ -460,60 +473,95 @@ class AdversarialRunner(object):
                 self._update_plr_with_current_unseen_levels(parent_seeds=fixed_seeds)
                 return
             if level_replay: # Get replay levels
+                print('REPLAYING LEVEL')
                 self.current_level_seeds = [level_sampler.sample_replay_level() for _ in range(args.num_processes)]
+                print(args.num_processes)
+                print(self.current_level_seeds)
                 levels = [self.level_store.get_level(seed) for seed in self.current_level_seeds]
                 self.ued_venv.reset_to_level_batch(levels)
                 return self.current_level_seeds
             elif self.is_dr and not args.use_plr: 
+                #ACCEL uses PLR so not used ------------------
                 obs = self.ued_venv.reset_random() # don't need obs here
                 self.total_seeds_collected += args.num_processes
                 return
             elif self.is_dr and args.use_plr and args.use_reset_random_dr:
+                #default is false so not used ------------
                 obs = self.ued_venv.reset_random() # don't need obs here
                 self._update_plr_with_current_unseen_levels(parent_seeds=fixed_seeds)
                 self.total_seeds_collected += args.num_processes
                 return
             elif self.is_alp_gmm:
+                #is is_dr so not used ---------------------
                 obs = self.alp_gmm_teacher.set_env_params(self.ued_venv)
                 self.total_seeds_collected += args.num_processes
                 return
             else:
+                #!!!generating new env under ACCEL should fall under this one ------
+
                 obs = self.ued_venv.reset() # Prepare for constructive rollout
+                #reset environment to start state e.g. blank terrain ----------------
                 self.total_seeds_collected += args.num_processes
+        
+        #AGENT: if collecting agent's trajectories ----------
         else:
+            #AGENT: reset agent to initial state in environment --------------
+            #!BUT how does it know where to load environments from -> probably look at self.venv
             obs = self.venv.reset_agent()
 
+        #collecting observations -------------------
+
         # Initialize first observation
+        #store the first state to environment/protagonist agent -----------
         agent.storage.copy_obs_to_index(obs,0)
         
         rollout_info = {}
         rollout_returns = [[] for _ in range(args.num_processes)]
 
         if level_sampler and level_replay:
+            #if replaying levels, initialise solved levels indices -----------
+            #when generating new levels not using this ------------
             rollout_info.update({
                 'solved_idx': np.zeros(args.num_processes, dtype=np.bool)
             })
             
         for step in range(num_steps):
+            #ENV: environment agents also given num_steps to add/remove blocks ---------
+            #ENV: for each block being added/removed, ----------
+            #AGENT: for each step in trajectory, ---------
+
             if args.render:
                 self.venv.render_to_screen()
+
             # Sample actions
             with torch.no_grad():
+                #disable gradient calculation i.e. only evaluating --------
+                #get previous state/environment -----------
                 obs_id = agent.storage.get_obs(step)
+
+                #sample action here using previous state etc. -----------
+                #ENV: environment agent randomly samples action (in case of ACCEL) -------
+                #ENV: other values probably not applicable to ACCEL environment generation --------
+                #AGENT: sample action in state and collect predicted value of state, action, action probability etc. -----
                 value, action, action_log_dist, recurrent_hidden_states = agent.act(
                     obs_id, agent.storage.get_recurrent_hidden_state(step), agent.storage.masks[step])
+
+                #calculating action probability distributions
                 if self.is_discrete_actions:
                     action_log_prob = action_log_dist.gather(-1, action)
                 else:
                     action_log_prob = action_log_dist
 
             # Observe reward and next obs
-            reset_random = self.is_dr and not args.use_plr
+            #reset_random should be false for ACCEL bc use_plr is true ---------
+            reset_random = self.is_dr and not args.use_plr #FALSE
             _action = agent.process_action(action.cpu())
 
             if is_env:
+                #for dr this would probably just give obs/done/infos, no reward ---------
                 obs, reward, done, infos = self.ued_venv.step_adversary(_action)
             else:
+                #AGENT: take the step according to sampled action and collect obs, reward, done, infos for traj ----------
                 obs, reward, done, infos = self.venv.step_env(_action, reset_random=reset_random)
                 if args.clip_reward:
                     reward = torch.clamp(reward, -args.clip_reward, args.clip_reward)
@@ -577,6 +625,8 @@ class AdversarialRunner(object):
             if (not is_env) and level_sampler:
                 current_level_seeds = torch.tensor(self.current_level_seeds, dtype=torch.int).view(-1, 1)
 
+            #ENV: for each timestep of level generation save the observations which should include state
+            #AGENT: for each timestep of trajectory save the observations
             agent.insert(
                 obs, recurrent_hidden_states, 
                 action, action_log_prob, action_log_dist, 
@@ -585,13 +635,22 @@ class AdversarialRunner(object):
                 cliffhanger_masks=cliffhanger_masks)
 
             if level_sampler and level_replay:
+                #if replaying levels instead of sampling new ones, update the level seeds
                 self.current_level_seeds = next_level_seeds
 
         # Add generated env to level store (as a constructive string representation)
         if is_env and args.use_plr and not level_replay:
+            #generating new env ACCEL ------------
             self._update_plr_with_current_unseen_levels()
 
         rollout_info.update(self._get_rollout_return_stats(rollout_returns))
+
+        if not is_env:
+            ########################## STORE TRAJECTORIES, UPDATE DIVERSITY ##########################
+            #MIGHT NEED ADD MORE FOR SINGLING OUT ACCEL
+            self.trajectory_buffer.insert(agent.storage)
+            # if not (self.trajectory_buffer.sample_full_distribution and len(level_sampler.working_seed_set)==0):
+            self.trajectory_buffer.calculate_wasserstein_distance(agent.storage.level_seeds, level_sampler)
 
         # Update non-env agent if required
         if not is_env and update: 
@@ -601,6 +660,7 @@ class AdversarialRunner(object):
                     obs_id, agent.storage.get_recurrent_hidden_state(-1),
                     agent.storage.masks[-1]).detach()
 
+            #AGENT: calculate returns
             agent.storage.compute_returns(
                 next_value, args.use_gae, args.gamma, args.gae_lambda)
 
@@ -676,9 +736,9 @@ class AdversarialRunner(object):
     def run(self):
         args = self.args
 
-        adversary_env = self.agents['adversary_env']
+        adversary_env = self.agents['adversary_env'] #environment agent
         agent = self.agents['agent']
-        adversary_agent = self.agents['adversary_agent']
+        adversary_agent = self.agents['adversary_agent'] #not used for accel
 
         level_replay = False
         if args.use_plr and self.is_training:
@@ -694,7 +754,21 @@ class AdversarialRunner(object):
         if self.is_training and not student_discard_grad:
             self.student_grad_updates += 1
 
+
+        # level_replay FALSE:
+        # generate new levels
+        # evaluate agent on the new levels
+        # add levels to buffer if they have better score
+
+        # level_replay TRUE:
+        # sample replay levels
+        # train agent on the sampled levels
+        # edit sampled levels
+        # evaluate agent on new levels
+        # add levels to buffer if they have better score
+
         # Generate a batch of adversarial environments
+
         env_info = self.agent_rollout(
             agent=adversary_env, 
             num_steps=self.adversary_env_rollout_steps, 
@@ -792,6 +866,7 @@ class AdversarialRunner(object):
                 level_sampler=level_sampler,
                 update_level_sampler=is_updateable,
                 discard_grad=True)
+ 
         # ==== ACCEL end ====
 
         if args.use_plr:

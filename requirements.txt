@@ -1,3 +1,4 @@
+six
 cloudpickle>=1.2
 gym==0.15.7
 gym-minigrid==1.0.1

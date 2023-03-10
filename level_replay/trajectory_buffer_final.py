@@ -35,9 +35,9 @@ class TrajectoryBuffer(object):
         #self.actions = torch.zeros(num_steps, num_processes, action_shape)
         #self.obs = torch.zeros(num_steps + 1, num_processes, *observation_space.shape)
 
-        level_seeds = storage.level_seeds
-        action_trajs = storage.actions
-        obs_trajs = storage.obs
+        level_seeds = storage.level_seeds.cpu()
+        action_trajs = storage.actions.cpu()
+        obs_trajs = storage.obs.cpu()
 
         # change to collect based on seeds across processes
         #for each process we can expect multiple seeds if in replay mode
@@ -130,13 +130,13 @@ class TrajectoryBuffer(object):
         #exclude seeds eval since they might be from working set/alr have trajs
         # print('SEEDS COMPARE')
         # print(seeds_compare)
-        seeds_compare = seeds_compare[~np.isin(seeds_compare, seeds)]
-        print(seeds_compare)
+        # IN REPLAY YOU SHOULD STILL UPDATE SEEDS. the seeds compare will all be in working seeds
+        # resulting in empty list --> need edit
 
         #get unique list of seeds since seeds is in shape (#timesteps, #process, 1)
-        seeds = np.unique(seeds)
+        seeds = np.unique(seeds.cpu())
 
-        print('staging seeds:', seeds)
+        print('evaluated seeds:', seeds)
         for seed in seeds:
             # print('SEEDDDDDDDDDDDDDDDDDD')
             seed = seed.item()
@@ -146,5 +146,7 @@ class TrajectoryBuffer(object):
                 # print('NO SEEDS TO COMPARE')
                 level_sampler.update_diversity(seed, 0, self.sample_full_distribution)
                 continue
+            #if currently evaluated seed is in working set (i.e. replay) then remove it from seeds compare
+            seeds_compare = seeds_compare[seeds_compare!=seed]
             diversity = self._calculate_wasserstein_distance(seed, seeds_compare)
             level_sampler.update_diversity(seed, diversity, self.sample_full_distribution)

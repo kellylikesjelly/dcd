@@ -261,6 +261,9 @@ class LevelSampler():
 
         #################### COMBINE DIVERSITY IN WITH MERGED SCORE ############################
         diversity_score = self.diversity_buffer[seed]
+        print('SCORES')
+        print(merged_score)
+        print(diversity_score)
         merged_score_combined = self.diversity_coef*diversity_score + (1-self.diversity_coef)*merged_score
 
         if done:
@@ -283,7 +286,7 @@ class LevelSampler():
                 self.working_seed_set.add(seed)
                 self.seeds[seed_idx] = seed
                 #############  ADD DIVERSITY SCORE ##############
-                self.seed_diversity[seed_idx] = seed
+                self.seed_diversity[seed_idx] = diversity_score
 
                 self.seed2index[seed] = seed_idx 
                 self.seed_scores[seed_idx] = merged_score
@@ -303,7 +306,7 @@ class LevelSampler():
                 self.partial_seed_scores_buffer[a].pop(seed, None) 
                 self.partial_seed_steps_buffer[a].pop(seed, None)
                 ################ REMOVE DIVERSITY OF SEED FROM BUFFER ###############
-            self.diversity_buffer.pop(seed, None)
+            self.diversity_buffer.pop(seed)
             del self.seed2timestamp_buffer[seed]
             del self.seed2actor[seed]
             #remove seed from staging set -------------
@@ -840,7 +843,8 @@ class LevelSampler():
             #unseen=1, seen=0
             #unseen:0, seen:1
             #if unseen, 0 out the weights
-            #but if all unseen (i.e. nothing in working seed buffer yet) then how?
+            #but if all unseen (i.e. nothing in working seed buffer yet) then how? -> SHOULD BE solved
+            #by having larger working buffer
             weights = weights * (1-self.unseen_seed_weights)
             print(weights)
             weights /= np.sum(weights)

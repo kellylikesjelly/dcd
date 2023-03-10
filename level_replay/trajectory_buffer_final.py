@@ -2,18 +2,16 @@ from collections import defaultdict
 import numpy as np
 import ot
 
-#DOUBLE CHECK THE LOGIC!!!
-
 #buffer should be intialised once at start of training only to save all trajectories
 
 class TrajectoryBuffer(object):
     '''
-        For storing trajectories. Stores only trajectories from the latest play for each level and their masks.
+        For storing trajectories. Stores only trajectories from the latest run for each level.
     '''
     def __init__(self, env, sample_full_distribution):
         #initialise a dictionary mapping from seed to trajectory
-        self.action_buffer = defaultdict()
-        self.obs_buffer = defaultdict()
+        self.action_buffer = dict()
+        self.obs_buffer = dict()
 
         action_space = env.action_space
         self.action_space_high = action_space.high
@@ -41,16 +39,6 @@ class TrajectoryBuffer(object):
         action_trajs = storage.actions
         obs_trajs = storage.obs
 
-        # if storage.is_dict_obs:
-        #     np_obs = np.empty((action_trajs.shape[0], action_trajs.shape[1], len(obs_trajs)))
-        #     print('HIIIIIIIIIIIIIIIIIIIIIIIIIII')
-        #     print(obs_trajs.keys())
-        #     print(obs_trajs)
-        #     for k in obs_trajs.keys():
-        #         idx_np = self.key2idx[k]
-        #         np_obs[:,:,idx_np] = obs_trajs[k][1:,:]
-        #     obs_trajs = np_obs
-
         # change to collect based on seeds across processes
         #for each process we can expect multiple seeds if in replay mode
 
@@ -60,8 +48,8 @@ class TrajectoryBuffer(object):
             action_trajs_seed = action_trajs[np.squeeze(level_seeds==seed),:]
             obs_trajs_seed = obs_trajs[:-1,:,:][np.squeeze(level_seeds==seed),:]
 
-            if action_trajs_seed.shape[0] != obs_trajs_seed.shape[0]:
-                raise Exception("Trajs not same length!")
+            # if action_trajs_seed.shape[0] != obs_trajs_seed.shape[0]:
+            #     raise Exception("Trajs not same length!")
 
             self.action_buffer[seed] = action_trajs_seed
             self.obs_buffer[seed] = obs_trajs_seed
@@ -71,7 +59,6 @@ class TrajectoryBuffer(object):
         '''CALCULATES MIN WASSERSTEIN OF 1 SEED_EVAL WITH MULTIPLE SEEDS_COMPARE'''
 
         #SHAPE of each traj array: (#trajs, #timestepsw/buffer, act/obs#dim)
-        #full or not distribution should be handled outside this function
 
         #intialise pairwise wasserstein distance array
         distances = np.empty(seeds_compare.shape[0])
@@ -92,10 +79,6 @@ class TrajectoryBuffer(object):
         for seed_idx in range(len(seeds_compare)):
             #retrieve seed_compare
             seed = seeds_compare[seed_idx]
-
-            #don't compare seeds with themselves
-            if seed == seed_eval:
-                continue
 
             seed_compare_actions = self.action_buffer[seed]
             seed_compare_obs = self.obs_buffer[seed]
@@ -132,22 +115,26 @@ class TrajectoryBuffer(object):
         #handle when not all seeds have collected trajectories yet -> dont compare with them
         seeds_with_trajs = np.array(list(self.action_buffer.keys()))
 
+        #exclude seeds eval
+
         if self.sample_full_distribution:
             #retrieve seeds from working set as compare_seeds? (CHECK IF THIS IS CORRECT)
             #then compare the score with staging set (though i think this is handled in level sampler)
             seeds_compare = np.array(list(level_sampler.working_seed_set))
-            print(seeds_compare)
-            print(seeds_with_trajs)
-            print(seeds_compare.shape)
-            print(seeds_with_trajs.shape)
-            seeds_compare = seeds_compare[np.isin(seeds_compare, seeds_with_trajs)]
-            print(seeds_compare)
+            # seeds_compare = seeds_compare[np.isin(seeds_compare, seeds_with_trajs)]
+            # print(seeds_compare)
         else:
             seeds_compare = seeds_with_trajs
             #retrieve seeds from entire seed buffer as compare_seeds? (CHECK IF THIS IS CORRECT)
 
-        #NEED TO SPLIT SEEDS ACCORDING TO PROCESS AVOID REPEATS!!!!
-        seeds = seeds[0,:,0]
+        #exclude seeds eval since they might be from working set/alr have trajs
+        print('SEEDS COMPARE')
+        print(seeds_compare)
+        seeds_compare = seeds_compare[~np.isin(seeds_compare, seeds)]
+        print(seeds_compare)
+
+        #get unique list of seeds since seeds is in shape (#timesteps, #process, 1)
+        seeds = np.unique(seeds)
 
         print('staging seeds:', seeds)
         for seed in seeds:

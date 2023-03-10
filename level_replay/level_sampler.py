@@ -258,22 +258,38 @@ class LevelSampler():
 
         running_num_steps = partial_num_steps + num_steps
         merged_score = partial_score + (score - partial_score)*num_steps/float(running_num_steps)
+        print('MERGED SCORE', merged_score)
 
         #################### COMBINE DIVERSITY IN WITH MERGED SCORE ############################
+
         diversity_score = self.diversity_buffer[seed]
-        print('SCORES')
-        print(merged_score)
-        print(diversity_score)
-        merged_score_combined = self.diversity_coef*diversity_score + (1-self.diversity_coef)*merged_score
+        #if not filled, add seed in regardless
+        if self._proportion_filled < 1.0:
+            seed_idx = self.working_seed_buffer_size
+            #setting to a default bc seed will be added
+            merged_score_combined = -1
+            min_score = 0
+        else:
+            #get only seen seeds for ranking
+            seen_scores = np.concatenate([self.seed_scores, np.array([merged_score])])
+            seen_scores_weights = self._score_transform(self.score_transform, self.temperature, seen_scores)
+            seen_diversity = np.concatenate([self.seed_scores, np.array([diversity_score])])
+            seen_diversity_weights = self._score_transform(self.diversity_transform, self.diversity_temperature, seen_diversity)
+
+            merged_scores_combined = self.diversity_coef*seen_diversity_weights + \
+                (1-self.diversity_coef)*seen_scores_weights
+            
+            seed_idx = np.argmin(merged_scores_combined[:-1])
+            min_score = merged_scores_combined[seed_idx]
+            merged_score_combined = merged_scores_combined[-1]
 
         if done:
-            print('DONE')
             # Move seed into working seed data structures
-            seed_idx = self._next_buffer_index
+            # seed_idx = self._next_buffer_index
+
             print('merged_score_combined', merged_score_combined)
-            print('self.seed_scores[seed_idx]', self.seed_scores[seed_idx])
-            if self.seed_scores[seed_idx] <= merged_score_combined or self.unseen_seed_weights[seed_idx] > 0:
-                print('REPLACED')
+            print('min_score', min_score)
+            if self.unseen_seed_weights[seed_idx] > 0 or min_score <= merged_score_combined:
                 #if lowest seed score is lower than current seed's score, ------------
                 # or if lowest seed is already seen
                 # remove lowest seed from working seed set, add current seed to working seed set
@@ -290,6 +306,7 @@ class LevelSampler():
 
                 self.seed2index[seed] = seed_idx 
                 self.seed_scores[seed_idx] = merged_score
+                print('MERGED SCORE', merged_score)
                 self.partial_seed_scores[:,seed_idx] = 0.
                 self.partial_seed_steps[:,seed_idx] = 0 
 
@@ -597,7 +614,7 @@ class LevelSampler():
                     score, max_score = score_function(**score_function_kwargs)
                     num_steps = len(episode_logits)
                     #do final update on seed score using each episode incrementally ----------
-                    print('COMPLETE')
+                    # print('COMPLETE')
                     _, seed_idx = self.update_seed_score(actor_index, seed_t, score, max_score, num_steps)
 
                     # Track grounded value for future reference
@@ -637,10 +654,10 @@ class LevelSampler():
 
                 #for incomplete episodes final update is different from complete episodes ---------
                 if self.sample_full_distribution and seed_t in self.staging_seed_set:
-                    print('NOT COMPLETE')
+                    # print('NOT COMPLETE')
                     self._partial_update_seed_score_buffer(actor_index, seed_t, score, num_steps)
                 else:
-                    print('NOT COMPLETE')
+                    # print('NOT COMPLETE')
                     self._partial_update_seed_score(actor_index, seed_t, score, max_score, num_steps)
 
     def after_update(self):
@@ -676,21 +693,21 @@ class LevelSampler():
         #get seed index
         #if not full distribution, update seed_diversity immediately
         #if full distribution, add to seed buffer
-        print('UPDATE DIVERSITY')
+        # print('UPDATE DIVERSITY')
     
         if sample_full_distribution:
             if seed in self.working_seed_set:
                 #if seed is sampled from working buffer edit diversity score not buffer
-                print('WORKING SET')
+                # print('WORKING SET')
                 seed_idx = self.seed2index.get(seed)
                 self.seed_diversity[seed_idx] = diversity
             else:
                 #if seed is from staging set edit diversity buffer
                 self.diversity_buffer[seed] = diversity
-                print('DIVERSITY BUFFER')
+                # print('DIVERSITY BUFFER')
                 print(self.diversity_buffer)
         else:
-            print('NOT FULL DIST')
+            # print('NOT FULL DIST')
             seed_idx = self.seed2index.get(seed)
             self.seed_diversity[seed_idx] = diversity
 
@@ -837,7 +854,7 @@ class LevelSampler():
         if z > 0:
             weights /= z
         else:
-            print(weights)
+            # print(weights)
             #giving every level equal weights
             weights = np.ones_like(weights, dtype=np.float)/len(weights)
             #unseen=1, seen=0
@@ -846,7 +863,7 @@ class LevelSampler():
             #but if all unseen (i.e. nothing in working seed buffer yet) then how? -> SHOULD BE solved
             #by having larger working buffer
             weights = weights * (1-self.unseen_seed_weights)
-            print(weights)
+            # print(weights)
             weights /= np.sum(weights)
 
         staleness_weights = 0
@@ -866,10 +883,10 @@ class LevelSampler():
             diversity_weights = diversity_weights * (1-self.unseen_seed_weights)
             z = np.sum(diversity_weights)
             if z > 0: 
-                print('DIVERSITY SCORES')
-                print(self.seed_diversity)
-                print('DIVERSITY WEIGHTS')
-                print(diversity_weights)
+                # print('DIVERSITY SCORES')
+                # print(self.seed_diversity)
+                # print('DIVERSITY WEIGHTS')
+                # print(diversity_weights)
                 diversity_weights /= z
             else:
                 diversity_weights = 1./len(diversity_weights)*(1-self.unseen_seed_weights)

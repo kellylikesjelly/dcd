@@ -128,8 +128,8 @@ class TrajectoryBuffer(object):
             #retrieve seeds from entire seed buffer as compare_seeds? (CHECK IF THIS IS CORRECT)
 
         #exclude seeds eval since they might be from working set/alr have trajs
-        print('SEEDS COMPARE')
-        print(seeds_compare)
+        # print('SEEDS COMPARE')
+        # print(seeds_compare)
         seeds_compare = seeds_compare[~np.isin(seeds_compare, seeds)]
         print(seeds_compare)
 
@@ -138,12 +138,12 @@ class TrajectoryBuffer(object):
 
         print('staging seeds:', seeds)
         for seed in seeds:
-            print('SEEDDDDDDDDDDDDDDDDDD')
+            # print('SEEDDDDDDDDDDDDDDDDDD')
             seed = seed.item()
-            print(seed)
+            # print(seed)
             #if no seeds to compare, temporarily set seed to 0 diversity (should still fill up working seeds)
             if len(seeds_compare)==0:
-                print('NO SEEDS TO COMPARE')
+                # print('NO SEEDS TO COMPARE')
                 level_sampler.update_diversity(seed, 0, self.sample_full_distribution)
                 continue
             diversity = self._calculate_wasserstein_distance(seed, seeds_compare)

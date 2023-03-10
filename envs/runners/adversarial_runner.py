@@ -473,10 +473,10 @@ class AdversarialRunner(object):
                 self._update_plr_with_current_unseen_levels(parent_seeds=fixed_seeds)
                 return
             if level_replay: # Get replay levels
-                print('REPLAYING LEVEL')
+                # print('REPLAYING LEVEL')
                 self.current_level_seeds = [level_sampler.sample_replay_level() for _ in range(args.num_processes)]
-                print(args.num_processes)
-                print(self.current_level_seeds)
+                # print(args.num_processes)
+                # print(self.current_level_seeds)
                 levels = [self.level_store.get_level(seed) for seed in self.current_level_seeds]
                 self.ued_venv.reset_to_level_batch(levels)
                 return self.current_level_seeds

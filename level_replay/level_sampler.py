@@ -258,7 +258,10 @@ class LevelSampler():
 
         running_num_steps = partial_num_steps + num_steps
         merged_score = partial_score + (score - partial_score)*num_steps/float(running_num_steps)
-        print('MERGED SCORE', merged_score)
+        # print('MERGED SCORE', merged_score)
+        # if merged_score==0:
+        #     print('partial_score', partial_score)
+        #     print('score', score)
 
         #################### COMBINE DIVERSITY IN WITH MERGED SCORE ############################
 
@@ -270,28 +273,27 @@ class LevelSampler():
             merged_score_combined = -1
             min_score = 0
         else:
-            #get only seen seeds for ranking
+            #use ranking score transform to normalise scores into weights
             seen_scores = np.concatenate([self.seed_scores, np.array([merged_score])])
             seen_scores_weights = self._score_transform(self.score_transform, self.temperature, seen_scores)
-            seen_diversity = np.concatenate([self.seed_scores, np.array([diversity_score])])
+            seen_diversity = np.concatenate([self.seed_diversity, np.array([diversity_score])])
             seen_diversity_weights = self._score_transform(self.diversity_transform, self.diversity_temperature, seen_diversity)
 
             merged_scores_combined = self.diversity_coef*seen_diversity_weights + \
                 (1-self.diversity_coef)*seen_scores_weights
             
-            seed_idx = np.argmin(merged_scores_combined[:-1])
-            min_score = merged_scores_combined[seed_idx]
+            min_score = np.min(merged_scores_combined[:-1])
             merged_score_combined = merged_scores_combined[-1]
 
         if done:
             # Move seed into working seed data structures
             # seed_idx = self._next_buffer_index
 
-            print('merged_score_combined', merged_score_combined)
-            print('min_score', min_score)
+            # print('merged_prob_combined', merged_score_combined)
+            # print('min_score', min_score)
             if self.unseen_seed_weights[seed_idx] > 0 or min_score <= merged_score_combined:
                 #if lowest seed score is lower than current seed's score, ------------
-                # or if lowest seed is already seen
+                # or if buffer isnt filled
                 # remove lowest seed from working seed set, add current seed to working seed set
                 # new seed replaces old seed index in all lists  ---------------
 
@@ -306,7 +308,6 @@ class LevelSampler():
 
                 self.seed2index[seed] = seed_idx 
                 self.seed_scores[seed_idx] = merged_score
-                print('MERGED SCORE', merged_score)
                 self.partial_seed_scores[:,seed_idx] = 0.
                 self.partial_seed_steps[:,seed_idx] = 0 
 
@@ -705,7 +706,7 @@ class LevelSampler():
                 #if seed is from staging set edit diversity buffer
                 self.diversity_buffer[seed] = diversity
                 # print('DIVERSITY BUFFER')
-                print(self.diversity_buffer)
+                # print(self.diversity_buffer)
         else:
             # print('NOT FULL DIST')
             seed_idx = self.seed2index.get(seed)

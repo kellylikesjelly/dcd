@@ -473,7 +473,7 @@ class AdversarialRunner(object):
                 self._update_plr_with_current_unseen_levels(parent_seeds=fixed_seeds)
                 return
             if level_replay: # Get replay levels
-                # print('REPLAYING LEVEL')
+                print('REPLAYING LEVEL')
                 self.current_level_seeds = [level_sampler.sample_replay_level() for _ in range(args.num_processes)]
                 # print(args.num_processes)
                 # print(self.current_level_seeds)
@@ -581,6 +581,7 @@ class AdversarialRunner(object):
                 next_level_seeds = [s for s in self.current_level_seeds]
                 
             for i, info in enumerate(infos):
+                # ----------------- how we know an episode from that seed is finished ----------------
                 if 'episode' in info.keys():
                     rollout_returns[i].append(info['episode']['r'])
 
@@ -649,7 +650,6 @@ class AdversarialRunner(object):
             ########################## STORE TRAJECTORIES, UPDATE DIVERSITY ##########################
             #MIGHT NEED ADD MORE FOR SINGLING OUT ACCEL
             self.trajectory_buffer.insert(agent.storage)
-            # if not (self.trajectory_buffer.sample_full_distribution and len(level_sampler.working_seed_set)==0):
             self.trajectory_buffer.calculate_wasserstein_distance(agent.storage.level_seeds, level_sampler)
 
         # Update non-env agent if required

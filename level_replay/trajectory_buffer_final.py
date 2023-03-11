@@ -1,6 +1,8 @@
 from collections import defaultdict
 import numpy as np
 import ot
+#for code checking
+import pandas as pd
 
 #buffer should be intialised once at start of training only to save all trajectories
 
@@ -57,50 +59,71 @@ class TrajectoryBuffer(object):
 
     def _calculate_wasserstein_distance(self, seed_eval, seeds_compare):
         '''CALCULATES MIN WASSERSTEIN OF 1 SEED_EVAL WITH MULTIPLE SEEDS_COMPARE'''
+        #DEBUGGING
+        # pd.set_option('display.max_columns', 30)
 
         #SHAPE of each traj array: (#trajs, #timestepsw/buffer, act/obs#dim)
 
         #intialise pairwise wasserstein distance array
         distances = np.empty(seeds_compare.shape[0])
-        #retrieve current set of trajs
+        #retrieve current set of traj
         seed_eval_actions = self.action_buffer[seed_eval]
         seed_eval_obs = self.obs_buffer[seed_eval]
         #process trajectories: normalise, combine
         seed_eval_actions = (seed_eval_actions - self.action_space_low)/(self.action_space_high - self.action_space_low)
-        
+        # print('seed_eval_actions_norm')
+        # print(pd.DataFrame(seed_eval_actions).describe())
+
+        # print('seed_eval_obs', seed_eval_obs.shape)
+        # pd.DataFrame(seed_eval_obs).describe()
         if self.obs_space_high[0]==np.inf:
             seed_eval_obs = np.exp(seed_eval_obs) / (1 + np.exp(seed_eval_obs))
         else:
             seed_eval_obs = (seed_eval_obs - self.obs_space_low)/(self.obs_space_high - self.obs_space_low)
-        
+        # print('seed_eval_obs_norm', seed_eval_obs.shape)
+        # print(pd.DataFrame(seed_eval_obs).describe())
+
         eval_state_action_traj = np.concatenate([seed_eval_actions, seed_eval_obs], axis=-1)
+        # print('eval_state_action_traj')
+        # print(pd.DataFrame(eval_state_action_traj).describe())
 
         #for each compare_seed we compare the pair of trajectories
         for seed_idx in range(len(seeds_compare)):
             #retrieve seed_compare
             seed = seeds_compare[seed_idx]
+            # print('seed_compare', seed)
 
             seed_compare_actions = self.action_buffer[seed]
             seed_compare_obs = self.obs_buffer[seed]
+
+            # print('seed_compare_actions', seed_compare_actions, seed_compare_actions.shape)
             seed_compare_actions = (seed_compare_actions - self.action_space_low)/(self.action_space_high - self.action_space_low)
-            
+            # print('seed_compare_actions_norm', seed_compare_actions, seed_compare_actions.shape)
+
+            # print('seed_compare_obs', seed_compare_obs, seed_compare_obs.shape)
             #if observations are unbounded, to bound (0...1) range
             if self.obs_space_high[0]==np.inf:
                 seed_compare_obs = np.exp(seed_compare_obs) / (1 + np.exp(seed_compare_obs))
             else:
             #use min max normalisation
                 seed_compare_obs = (seed_compare_obs - self.obs_space_low)/(self.obs_space_high - self.obs_space_low)
-            
+            # print('seed_compare_obs_norm', seed_compare_obs, seed_compare_obs.shape)
+
             compare_state_action_traj = np.concatenate([seed_compare_actions, seed_compare_obs], axis=-1)
+            # print('compare_state_action_traj', compare_state_action_traj, compare_state_action_traj.shape)
 
             #uniform weight distribution for each timestep
             s_eval = [1/eval_state_action_traj.shape[0]]*eval_state_action_traj.shape[0]
             s_compare = [1/compare_state_action_traj.shape[0]]*compare_state_action_traj.shape[0]
+            # print('s_eval', len(s_eval))
+            # print('s_compare',len(s_compare))
                     
             #create cost matrix using euclidean distance as cost
             M = ot.dist(eval_state_action_traj, compare_state_action_traj, metric='euclidean')
+            # print('M', M)
             #calculate wasserstein distance
-            W = ot.emd2(s_eval, s_compare, M)
+            W = ot.emd2(s_eval, s_compare, M, numItermax=200000)
+            # print('W', W)
             distances[seed_idx] = W
 
         #return minimum distance
@@ -136,17 +159,18 @@ class TrajectoryBuffer(object):
         #get unique list of seeds since seeds is in shape (#timesteps, #process, 1)
         seeds = np.unique(seeds.cpu())
 
-        print('evaluated seeds:', seeds)
+        # print('evaluated seeds:', seeds)
         for seed in seeds:
             # print('SEEDDDDDDDDDDDDDDDDDD')
             seed = seed.item()
             # print(seed)
+            seeds_compare_ = seeds_compare[seeds_compare!=seed]
+            # print('seeds compare', seeds_compare_)
             #if no seeds to compare, temporarily set seed to 0 diversity (should still fill up working seeds)
-            if len(seeds_compare)==0:
+            if len(seeds_compare_)==0:
                 # print('NO SEEDS TO COMPARE')
                 level_sampler.update_diversity(seed, 0, self.sample_full_distribution)
                 continue
             #if currently evaluated seed is in working set (i.e. replay) then remove it from seeds compare
-            seeds_compare = seeds_compare[seeds_compare!=seed]
-            diversity = self._calculate_wasserstein_distance(seed, seeds_compare)
+            diversity = self._calculate_wasserstein_distance(seed, seeds_compare_)
             level_sampler.update_diversity(seed, diversity, self.sample_full_distribution)

@@ -139,10 +139,51 @@ class BipedalWalkerCustom(gym.Env):
 
         self._reset_env()
 
-        high = np.array([np.inf] * 24)
+        ################## EDITED TO FOLLOW NEWEST BIPEDAL WALKER #####################
+        low = np.array(
+            [
+                -math.pi,
+                -5.0,
+                -5.0,
+                -5.0,
+                -math.pi,
+                -5.0,
+                -math.pi,
+                -5.0,
+                -0.0,
+                -math.pi,
+                -5.0,
+                -math.pi,
+                -5.0,
+                -0.0,
+            ]
+            + [-1.0] * 10
+        ).astype(np.float32)
+        high = np.array(
+            [
+                math.pi,
+                5.0,
+                5.0,
+                5.0,
+                math.pi,
+                5.0,
+                math.pi,
+                5.0,
+                5.0,
+                math.pi,
+                5.0,
+                math.pi,
+                5.0,
+                5.0,
+            ]
+            + [1.0] * 10
+        ).astype(np.float32)
+
+        # high = np.array([np.inf] * 24)
         self.action_space = spaces.Box(
             np.array([-1, -1, -1, -1]), np.array([+1, +1, +1, +1]))
-        self.observation_space = spaces.Box(-high, high)
+        # self.observation_space = spaces.Box(-high, high)
+        self.observation_space = spaces.Box(low, high)
 
     def re_init(self, env_config, seed):
 
@@ -502,7 +543,7 @@ class BipedalWalkerCustom(gym.Env):
 
     def _step(self, action):
         # self.hull.ApplyForceToCenter((0, 20), True) -- Uncomment this to receive a bit of stability help
-        control_speed = False  # Should be easier as well
+        control_speed = False  # Should be easier as well 
         if control_speed:
             self.joints[0].motorSpeed = float(
                 SPEED_HIP * np.clip(action[0], -1, 1))

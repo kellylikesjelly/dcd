@@ -38,6 +38,7 @@
 module purge
 module load Anaconda3/2022.05
 module load CUDA/11.2.2
+module load Xvfb
 
 
 # Do not remove this line even if you have executed conda init

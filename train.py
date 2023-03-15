@@ -161,6 +161,7 @@ if __name__ == '__main__':
     update_start_time = timer()
     num_updates = int(args.num_env_steps) // args.num_steps // args.num_processes
     for j in range(initial_update_count, num_updates):
+        print(f'Iteration {j}')
         stats = train_runner.run()
 
         # === Perform logging ===
@@ -178,6 +179,7 @@ if __name__ == '__main__':
             if evaluator is not None and (j % args.test_interval == 0 or j == num_updates - 1):
                 test_stats = evaluator.evaluate(train_runner.agents['agent'])
                 stats.update(test_stats)
+                print('tested')
             else:
                 stats.update({k:None for k in evaluator.get_stats_keys()})
 

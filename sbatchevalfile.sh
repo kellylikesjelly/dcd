@@ -53,9 +53,8 @@ conda activate dcd
 
 # Submit your job to the cluster
 srun --gres=gpu:1 python -m eval \
---base_path ~/logs/accel_1 \
---xpid ued-BipedalWalker-Adversarial-Easy-v0-domain_randomization-noexpgrad \
---model_tar model.tar
---env_names BipedalWalker-Med-Roughness-v0 \
---num_episodes 10 \
---result_path ~/results/accel_1
+--base_path="~/logs/accel_1" \
+--xpid=ued-BipedalWalker-Adversarial-Easy-v0-domain_randomization-noexpgrad \
+--env_names=BipedalWalker-Med-Roughness-v0 \
+--num_episodes=10 \
+--result_path="~/results/accel_1"

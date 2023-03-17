@@ -18,7 +18,7 @@ from util import \
     get_obs_at_index, \
     set_obs_at_index
 ################################ IMPORT TRAJECTORY BUFFER ################################
-from level_replay import TrajectoryBuffer
+# from level_replay import TrajectoryBuffer
 
 from teachDeepRL.teachers.teacher_controller import TeacherController
 
@@ -142,8 +142,8 @@ class AdversarialRunner(object):
             self._init_alp_gmm()
 
         ######################### INTIALISE TRAJ BUFFER ###########################
-        sample_full_distribution = plr_args["sample_full_distribution"]
-        self.trajectory_buffer = TrajectoryBuffer(self.venv, sample_full_distribution)
+        # sample_full_distribution = plr_args["sample_full_distribution"]
+        # self.trajectory_buffer = TrajectoryBuffer(self.venv, sample_full_distribution)
 
     @property
     def use_byte_encoding(self):
@@ -646,11 +646,16 @@ class AdversarialRunner(object):
 
         rollout_info.update(self._get_rollout_return_stats(rollout_returns))
 
+        #use discard grad to decide
+
         if not is_env:
             ########################## STORE TRAJECTORIES, UPDATE DIVERSITY ##########################
-            #MIGHT NEED ADD MORE FOR SINGLING OUT ACCEL
-            self.trajectory_buffer.insert(agent.storage)
-            self.trajectory_buffer.calculate_wasserstein_distance(agent.storage.level_seeds, level_sampler)
+            print('storing trajs')
+            level_sampler.insert_trajectory(agent.storage)
+            if not level_replay:
+                print('discard_grad', discard_grad)
+                ################# IF NOT LEVEL REPLAY calculate distance for staging set else skip
+                level_sampler.calculate_distance(discard_grad)
 
         # Update non-env agent if required
         if not is_env and update: 
@@ -680,6 +685,36 @@ class AdversarialRunner(object):
 
             if level_sampler and update_level_sampler:
                 level_sampler.after_update()
+
+            ############# UPDATE WORKING SEEDS HERE need newly sampled trajectories
+            if not discard_grad:
+                print('collecting new trajectories for working seeds')
+                #collect new trajectories and update working seed scores
+                adversary_env = self.agents['adversary_env']
+
+                print('setting replay')
+                #replay current working levels
+                env_info = self.agent_rollout(
+                agent=adversary_env, 
+                num_steps=self.adversary_env_rollout_steps, 
+                update=False,
+                is_env=True,
+                level_replay=True,
+                level_sampler=self._get_level_sampler('agent')[0],
+                update_level_sampler=False)
+                
+                print('collecting trajectories')
+                self.agent_rollout(
+                agent=agent, 
+                num_steps=self.agent_rollout_steps,
+                update=False,
+                level_replay=True,
+                level_sampler=level_sampler,
+                update_level_sampler=False,
+                discard_grad=True)
+
+                print('updating working seeds')
+                level_sampler.calculate_distance(discard_grad)
 
             rollout_info.update({
                 'value_loss': value_loss,

@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 from collections import namedtuple, defaultdict, deque
+from trajectory_buffer import TrajectoryBuffer
 import queue
 
 import numpy as np
@@ -132,6 +133,9 @@ class LevelSampler():
             self.tscl_episode_window = [deque(maxlen=self.tscl_window_size) for _ in range(N)]
             self.unseen_seed_weights = np.zeros(N) # Force uniform distribution over seeds
 
+        ################# intialise trajbuffer ######################
+        self.trajectory_buffer = TrajectoryBuffer(self.obs_space, self.action_space,self.sample_full_distribution)
+
     def seed_range(self):
         #sample full distribution probably means if there is a limit to seed numbers -------
         #return seed range ----------
@@ -248,6 +252,7 @@ class LevelSampler():
                 return self.sample_weights().argmin()
             else:
                 return self.seed_scores.argmin()
+    
 
     def _partial_update_seed_score_buffer(self, actor_index, seed, score, num_steps, done=False):
         seed_idx = -1
@@ -264,33 +269,36 @@ class LevelSampler():
         #     print('score', score)
 
         #################### COMBINE DIVERSITY IN WITH MERGED SCORE ############################
-
         diversity_score = self.diversity_buffer[seed]
-        #if not filled, add seed in regardless
-        if self._proportion_filled < 1.0:
-            seed_idx = self.working_seed_buffer_size
-            #setting to a default bc seed will be added
-            merged_score_combined = -1
-            min_score = 0
-        else:
-            #use ranking score transform to normalise scores into weights
-            seen_scores = np.concatenate([self.seed_scores, np.array([merged_score])])
-            seen_scores_weights = self._score_transform(self.score_transform, self.temperature, seen_scores)
-            seen_diversity = np.concatenate([self.seed_diversity, np.array([diversity_score])])
-            seen_diversity_weights = self._score_transform(self.diversity_transform, self.diversity_temperature, seen_diversity)
-
-            merged_scores_combined = self.diversity_coef*seen_diversity_weights + \
-                (1-self.diversity_coef)*seen_scores_weights
-            
-            min_score = np.min(merged_scores_combined[:-1])
-            merged_score_combined = merged_scores_combined[-1]
 
         if done:
             # Move seed into working seed data structures
-            # seed_idx = self._next_buffer_index
+            seed_idx = self._next_buffer_index
 
-            # print('merged_prob_combined', merged_score_combined)
-            # print('min_score', min_score)
+            #if not filled, add seed in regardless
+            if self._proportion_filled < 1.0:
+                #setting to a default bc seed will be added
+                merged_score_combined = -1
+                min_score = 0
+            else:
+                #use ranking score transform to normalise scores into weights
+                scores = np.concatenate([self.seed_scores, np.array([merged_score])])
+                weights = self._score_transform(self.score_transform, self.temperature, scores)
+                diversity = np.concatenate([self.seed_diversity, np.array([diversity_score])])
+                diversity_weights = self._score_transform(self.diversity_transform, self.diversity_temperature, diversity)
+
+                merged_scores_combined = self.diversity_coef*diversity_weights + \
+                    (1-self.diversity_coef)*weights
+                
+                #account for staleness in selecting the min score seed
+                min_score = merged_scores_combined[seed_idx]
+                #new seed score
+                merged_score_combined = merged_scores_combined[-1]
+
+            print('merged_prob_combined', merged_score_combined)
+            print('min_score', min_score)
+            print(seed_idx)
+
             if self.unseen_seed_weights[seed_idx] > 0 or min_score <= merged_score_combined:
                 #if lowest seed score is lower than current seed's score, ------------
                 # or if buffer isnt filled
@@ -298,6 +306,11 @@ class LevelSampler():
                 # new seed replaces old seed index in all lists  ---------------
 
                 #seeds in seed_scores, seed_staleness etc are all working seeds
+
+                ######## REMOVE REPLACED WORKING SEED FROM TRAJ BUFFER
+                self.trajectory_buffer.action_buffer.pop(self.seeds[seed_idx],None)
+                self.trajectory_buffer.obs_buffer.pop(self.seeds[seed_idx],None)
+                self.trajectory_buffer.processed_trajs.pop(self.seeds[seed_idx],None)
 
                 self.unseen_seed_weights[seed_idx] = 0. # Unmask this index
                 self.working_seed_set.discard(self.seeds[seed_idx])
@@ -317,6 +330,10 @@ class LevelSampler():
                 if self.track_solvable:
                     self.seed_solvable[seed_idx] = self.staging_seed2solvable.get(seed, True)
             else:
+                ############ REMOVE STAGING SEED FROM TRAJ BUFFER
+                self.trajectory_buffer.action_buffer.pop(seed,None)
+                self.trajectory_buffer.obs_buffer.pop(seed,None)
+                self.trajectory_buffer.processed_trajs.pop(seed,None)
                 seed_idx = None
 
             # Zero partial score, partial num_steps, remove seed from staging data structures
@@ -689,26 +706,16 @@ class LevelSampler():
             self.seed_staleness = self.seed_staleness + 1
             self.seed_staleness[selected_idx] = 0
 
-    def update_diversity(self, seed, diversity, sample_full_distribution):
-        #update diversity score for sampled seeds
-        #get seed index
-        #if not full distribution, update seed_diversity immediately
-        #if full distribution, add to seed buffer
-        # print('UPDATE DIVERSITY')
-    
-        if sample_full_distribution:
+    def update_diversity(self, seed, diversity):
+        if self.sample_full_distribution:
             if seed in self.working_seed_set:
                 #if seed is sampled from working buffer edit diversity score not buffer
-                # print('WORKING SET')
                 seed_idx = self.seed2index.get(seed)
                 self.seed_diversity[seed_idx] = diversity
             else:
                 #if seed is from staging set edit diversity buffer
                 self.diversity_buffer[seed] = diversity
-                # print('DIVERSITY BUFFER')
-                # print(self.diversity_buffer)
         else:
-            # print('NOT FULL DIST')
             seed_idx = self.seed2index.get(seed)
             self.seed_diversity[seed_idx] = diversity
 
@@ -846,7 +853,6 @@ class LevelSampler():
 
     def sample_weights(self):
         #sampling weights is combination of score i.e. regret and staleness ---------
-        #NEED TO ADD IN DIVERSITY SCORE IN THE ARRAY
 
         weights = self._score_transform(self.score_transform, self.temperature, self.seed_scores)
         weights = weights * (1-self.unseen_seed_weights) # zero out unseen levels
@@ -855,16 +861,8 @@ class LevelSampler():
         if z > 0:
             weights /= z
         else:
-            # print(weights)
-            #giving every level equal weights
             weights = np.ones_like(weights, dtype=np.float)/len(weights)
-            #unseen=1, seen=0
-            #unseen:0, seen:1
-            #if unseen, 0 out the weights
-            #but if all unseen (i.e. nothing in working seed buffer yet) then how? -> SHOULD BE solved
-            #by having larger working buffer
             weights = weights * (1-self.unseen_seed_weights)
-            # print(weights)
             weights /= np.sum(weights)
 
         staleness_weights = 0
@@ -884,13 +882,11 @@ class LevelSampler():
             diversity_weights = diversity_weights * (1-self.unseen_seed_weights)
             z = np.sum(diversity_weights)
             if z > 0: 
-                # print('DIVERSITY SCORES')
-                # print(self.seed_diversity)
-                # print('DIVERSITY WEIGHTS')
-                # print(diversity_weights)
                 diversity_weights /= z
             else:
-                diversity_weights = 1./len(diversity_weights)*(1-self.unseen_seed_weights)
+                diversity_weights = np.ones_like(diversity_weights, dtype=np.float)/len(diversity_weights)
+                diversity_weights = diversity_weights * (1-self.unseen_seed_weights)
+                diversity_weights /= np.sum(diversity_weights)
 
         #equation combining score and staleness ----------
         weights = (1 - self.staleness_coef - self.diversity_coef)*weights \
@@ -933,6 +929,12 @@ class LevelSampler():
             weights = 1/ranks ** (1./temperature)
 
         return weights
+    
+    def insert_trajectory(self, storage):
+        self.trajectory_buffer.insert(storage)
+
+    def calculate_distance(self, discard_grad):
+        self.trajectory_buffer.calculate_wasserstein_distance(self, discard_grad)
 
     @property
     def solvable_mass(self):

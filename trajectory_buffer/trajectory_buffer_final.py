@@ -176,7 +176,7 @@ class TrajectoryBuffer():
         seen_weights = weights[level_sampler.unseen_seed_weights==0]
 
         num_rank = 5
-        fixed_seeds = [env_info[x.item()] for x in easy] * int(args.num_processes/4)
+        
         highest_seeds = list(np.argsort(seen_weights)[-num_rank:])
         highest_seeds = [seen_seeds[seed_idx] for seed_idx in highest_seeds]
 

@@ -268,7 +268,7 @@ class LevelSampler():
         #     print('partial_score', partial_score)
         #     print('score', score)
 
-        #################### COMBINE DIVERSITY IN WITH MERGED SCORE ############################
+        ################### COMBINE DIVERSITY IN WITH MERGED SCORE ############################
         diversity_score = self.diversity_buffer[seed]
 
         if done:
@@ -291,15 +291,13 @@ class LevelSampler():
                     (1-self.diversity_coef)*weights
                 
                 #account for staleness in selecting the min score seed
-                min_score = merged_scores_combined[seed_idx]
+                min_score = np.min(merged_scores_combined[:-1])
+                seed_idx = np.argmin(merged_scores_combined[:-1])
                 #new seed score
                 merged_score_combined = merged_scores_combined[-1]
 
-            print('merged_prob_combined', merged_score_combined)
-            print('min_score', min_score)
-            print(seed_idx)
-
             if self.unseen_seed_weights[seed_idx] > 0 or min_score <= merged_score_combined:
+            # if self.seed_scores[seed_idx] <= merged_score or self.unseen_seed_weights[seed_idx] > 0:
                 #if lowest seed score is lower than current seed's score, ------------
                 # or if buffer isnt filled
                 # remove lowest seed from working seed set, add current seed to working seed set
@@ -875,23 +873,26 @@ class LevelSampler():
             else:
                 staleness_weights = 1./len(staleness_weights)*(1-self.unseen_seed_weights)
 
-        ################################### ADD IN DIVERSITY ####################################
-        diversity_weights = 0
-        if self.diversity_coef > 0:
-            diversity_weights = self._score_transform(self.diversity_transform, self.diversity_temperature, self.seed_diversity)
-            diversity_weights = diversity_weights * (1-self.unseen_seed_weights)
-            z = np.sum(diversity_weights)
-            if z > 0: 
-                diversity_weights /= z
-            else:
-                diversity_weights = np.ones_like(diversity_weights, dtype=np.float)/len(diversity_weights)
-                diversity_weights = diversity_weights * (1-self.unseen_seed_weights)
-                diversity_weights /= np.sum(diversity_weights)
+        # # ################################### ADD IN DIVERSITY ####################################
+        # diversity_weights = 0
+        # if self.diversity_coef > 0:
+        #     diversity_weights = self._score_transform(self.diversity_transform, self.diversity_temperature, self.seed_diversity)
+        #     diversity_weights = diversity_weights * (1-self.unseen_seed_weights)
+        #     z = np.sum(diversity_weights)
+        #     if z > 0: 
+        #         diversity_weights /= z
+        #     else:
+        #         diversity_weights = np.ones_like(diversity_weights, dtype=np.float)/len(diversity_weights)
+        #         diversity_weights = diversity_weights * (1-self.unseen_seed_weights)
+        #         diversity_weights /= np.sum(diversity_weights)
 
-        #equation combining score and staleness ----------
-        weights = (1 - self.staleness_coef - self.diversity_coef)*weights \
-            + self.staleness_coef*staleness_weights \
-            + self.diversity_coef*diversity_weights
+        # equation combining score and staleness ----------
+        # weights = (1 - self.staleness_coef - self.diversity_coef)*weights \
+        #     + self.staleness_coef*staleness_weights \
+        #     + self.diversity_coef*diversity_weights
+
+        weights = (1 - self.staleness_coef)*weights \
+            + self.staleness_coef*staleness_weights
 
         return weights
 

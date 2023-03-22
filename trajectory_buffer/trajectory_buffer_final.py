@@ -137,7 +137,9 @@ class TrajectoryBuffer():
 
     #     # print(i)
 
-    def _distance(self, eval_seeds, highest_seeds):
+    def _distance(self, eval_seeds, highest_seeds, level_sampler):
+        #place check for same seed (highly unlikely)
+
         for eval_seed in eval_seeds:
             eval_traj = self.processed_trajs[eval_seed]
             distances = np.zeros(shape=len(highest_seeds))-1
@@ -174,14 +176,17 @@ class TrajectoryBuffer():
         seen_weights = weights[level_sampler.unseen_seed_weights==0]
 
         num_rank = 5
-        highest_seeds = list(seen_seeds[np.argsort(seen_weights)>=len(seen_weights)-num_rank])
+        fixed_seeds = [env_info[x.item()] for x in easy] * int(args.num_processes/4)
+        highest_seeds = list(np.argsort(seen_weights)[-num_rank:])
+        highest_seeds = [seen_seeds[seed_idx] for seed_idx in highest_seeds]
 
         if discard_grad:
             eval_seeds = list(level_sampler.staging_seed_set)
         else:
-            lowest_seeds = seen_seeds[np.argsort(seen_weights)<num_rank]
+            lowest_seeds = list(np.argsort(seen_weights)[:num_rank])
+            lowest_seeds = [seen_seeds[seed_idx] for seed_idx in lowest_seeds]
             eval_seeds = list(lowest_seeds)
 
         print(len(eval_seeds), len(highest_seeds))
         print(eval_seeds, highest_seeds)
-        self._distance(eval_seeds, highest_seeds)
+        self._distance(eval_seeds, highest_seeds, level_sampler)
